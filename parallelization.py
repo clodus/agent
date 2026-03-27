@@ -1,4 +1,8 @@
 """
+https://fr.linkedin.com/posts/yassinechabli_9-workflows-agentic-llm-la-plupart-des-gens-activity-7438856556156207104-grKy
+https://huggingface.co/blog/dcarpintero/design-patterns-for-building-agentic-workflows
+https://www.digitalocean.com/community/tutorials/how-to-build-parallel-agentic-workflows-with-python
+
 Parallélisation
 Objectif : Réduire la latence en exécutant plusieurs agents en parallèle.
 
@@ -25,7 +29,7 @@ load_dotenv()
 # ----------------------------
 # CONFIG
 # ----------------------------
-MOCK_LLM = True
+MOCK_LLM = False
 MAX_WORKERS = 4
 CHUNK_SIZE = 100
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")  # FIX: host local par défaut
