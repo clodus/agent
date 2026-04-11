@@ -1,2 +1,4 @@
 python-dotenv
 ollama
+openai==0.26.5
+grados
