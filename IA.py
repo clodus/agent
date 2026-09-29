@@ -1,0 +1,218 @@
+####################################################################################################
+# PARTIE 1
+####################################################################################################
+
+from dotenv import load_dotenv
+load_dotenv(override=True)
+import os
+import json
+
+#########################
+#########################
+
+# LLM providers
+from openai import OpenAI
+
+# INSTANCE
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+google_api_key = os.getenv("GOOGLE_API_KEY")
+gemini = OpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
+
+#########################
+#########################
+# List MESSAGE
+messages = [{"role": "user", "content": "What is 2+2?"}]
+
+# CHOOSE MODEL
+model = "gemini-2.5-flash-preview-05-20"
+
+# FIRST CALL
+response = gemini.chat.completions.create(
+    model=model,
+    messages=messages
+)
+
+result = response.choices[0].message.content
+
+# SECOND CALL
+messages = [{"role": "user", "content": f"Present a pain-point in that {result} industry..."}]
+
+response = gemini.chat.completions.create(
+    model=model,
+    messages=messages
+)
+
+pain_point = response.choices[0].message.content
+#########################
+#########################
+
+
+##################################################
+# PATTERN COMPETITOR 
+##################################################
+openai = OpenAI(base_url=GEMINI_BASE_URL, api_key=google_api_key)
+question = "Quel est le nombre d'habitant sur terre ?"
+
+competitors = []
+answers = []
+messages = [{"role": "user", "content": question}]
+
+##### CANDIDAT 1
+model_name = "gpt-5-nano"
+
+response = openai.chat.completions.create(model=model_name, messages=messages)
+answer = response.choices[0].message.content
+
+competitors.append(model_name)
+answers.append(answer)
+
+##### CANDIDAT 2
+model_name = "claude-sonnet-4-5"
+
+response = openai.chat.completions.create(model=model_name, messages=messages)
+answer = response.choices[0].message.content
+
+competitors.append(model_name)
+answers.append(answer)
+
+##### JUDGE
+together = ""
+for index, answer in enumerate(answers):
+    together += f"# Response from competitor {index+1}\n\n"
+    together += answer + "\n\n"
+
+judge = f"""You are judging a competition between {len(competitors)} competitors.
+Each model has been given this question:
+
+{question}
+
+Your job is to evaluate each response for clarity and strength of argument, and rank them in order of best to worst.
+Respond with JSON, and only JSON, with the following format:
+{{"results": ["best competitor number", "second best competitor number", "third best competitor number", ...]}}
+
+Here are the responses from each competitor:
+
+{together}
+
+Now respond with the JSON with the ranked order of the competitors, nothing else. Do not include markdown formatting or code blocks."""
+
+judge_messages = [{"role": "user", "content": judge}]
+
+response = openai.chat.completions.create(
+    model="gpt-5-mini",
+    messages=judge_messages,
+)
+
+results = response.choices[0].message.content
+results_dict = json.loads(results)
+ranks = results_dict["results"]
+for index, result in enumerate(ranks):
+    competitor = competitors[int(result)-1]
+    print(f"Rank {index+1}: {competitor}")
+
+# ROLE USER : demande utilisateur
+# ROLE SYSTME : regles que AGENT doit suivre
+
+##################################################
+##################################################
+##################################################
+
+##################################################
+# CV CHAT IA SIMPLE / ROLE SYSTEME PROMPT
+##################################################
+from pypdf import PdfReader
+import gradio as gr
+from pydantic import BaseModel
+
+### FORMAT INDIQUE POUR LA REPONSE DE L'AGENT 
+class Evaluation(BaseModel):
+    is_acceptable: bool
+    feedback: str
+
+#### PROFIL ME
+reader = PdfReader("me/linkedin.pdf")
+linkedin = ""
+for page in reader.pages:
+    text = page.extract_text()
+    if text:
+        linkedin += text
+with open("me/summary.txt", "r", encoding="utf-8") as f:
+    summary = f.read()
+name = "Claude"
+system_prompt = f"Vous agissez en tant que {name}. Vous répondez aux questions posées sur le site web de {name}, notamment aux questions concernant sa carrière, son parcours, ses compétences et son expérience. \
+Votre responsabilité est de représenter {name} aussi fidèlement que possible lors des interactions avec les visiteurs du site. \
+Vous disposez d'un résumé du parcours de {name} ainsi que de son profil LinkedIn, que vous pouvez utiliser pour répondre aux questions. \
+Adoptez un ton professionnel, naturel et engageant, comme si vous échangiez avec un client potentiel ou un futur employeur ayant découvert le site. \
+Si vous ne connaissez pas la réponse à une question ou si les informations fournies ne permettent pas d'y répondre avec certitude, indiquez-le clairement et n'inventez pas d'informations."
+system_prompt += f"\n\n## Summary:\n{summary}\n\n## LinkedIn Profile:\n{linkedin}\n\n"
+system_prompt += f"Avec ce contexte, veuillez échanger avec l'utilisateur en restant toujours dans le rôle de {name}."
+
+
+
+
+###### ÉVALUATION DE LA RÉPONSE
+evaluator_system_prompt = f"Vous êtes un évaluateur chargé de déterminer si une réponse à une question est acceptable. \
+Vous disposez d'une conversation entre un utilisateur et un agent. Votre tâche consiste à déterminer si la dernière réponse de l'agent est d'une qualité acceptable. \
+L'agent joue le rôle de {name} et représente {name} sur son site web. \
+L'agent a reçu pour instruction d'être professionnel et engageant, comme s'il s'adressait à un client potentiel ou à un futur employeur ayant découvert le site web. \
+L'agent dispose d'informations contextuelles sur {name}, sous la forme d'un résumé de son parcours et des informations issues de son profil LinkedIn. Voici les informations :"
+evaluator_system_prompt += f"\n\n## Résumé :\n{summary}\n\n## Profil LinkedIn :\n{linkedin}\n\n"
+evaluator_system_prompt += f"À partir de ce contexte, veuillez évaluer la dernière réponse de l'agent en indiquant si elle est acceptable et en fournissant vos commentaires."
+
+
+# EVALUATE WITH FORMAT MESSAGE EVALUATION
+####################################################
+def evaluate(reply, message, history) -> Evaluation:
+    messages = [{"role": "system", "content": evaluator_system_prompt}] + [{"role": "user", "content": evaluator_user_prompt(reply, message, history)}]
+    response = gemini.beta.chat.completions.parse(model="gemini-2.5-flash", messages=messages, response_format=Evaluation)
+    return response.choices[0].message.parsed
+
+def evaluator_user_prompt(reply, message, history):
+    user_prompt = f"Voici la conversation entre l'utilisateur et l'agent : \n\n{history}\n\n"
+    user_prompt += f"Voici le dernier message de l'utilisateur : \n\n{message}\n\n"
+    user_prompt += f"Voici la dernière réponse de l'agent : \n\n{reply}\n\n"
+    user_prompt += "Veuillez évaluer la réponse en indiquant si elle est acceptable et en fournissant vos commentaires."
+    return user_prompt
+####################################################
+
+## RERUN SI REPONSE INCORRECT
+def rerun(reply, message, history, feedback):
+    updated_system_prompt = system_prompt + "\n\n## Réponse précédente rejetée\nVous venez d'essayer de répondre, mais le contrôle qualité a rejeté votre réponse.\n"
+    updated_system_prompt += f"## Votre tentative de réponse :\n{reply}\n\n"
+    updated_system_prompt += f"## Motif du rejet :\n{feedback}\n\n"
+    messages = [{"role": "system", "content": updated_system_prompt}] + history + [{"role": "user", "content": message}]
+    response = openai.chat.completions.create(model="gpt-4o-mini", messages=messages)
+    return response.choices[0].message.content
+
+
+def chat(message, history):
+    if "patent" in message:
+        system = system_prompt + "\n\nTout le contenu de votre réponse doit être rédigé en Pig Latin. Il est obligatoire que vous répondiez uniquement et intégralement en Pig Latin."
+    else:
+        system = system_prompt
+
+    messages = [{"role": "system", "content": system}] + history + [{"role": "user", "content": message}]
+    response = openai.chat.completions.create(model="gpt-4o-mini", messages=messages)
+    reply =response.choices[0].message.content
+
+    evaluation = evaluate(reply, message, history)
+    
+    if evaluation.is_acceptable:
+        print("Passed evaluation - returning reply")
+    else:
+        print("Failed evaluation - retrying")
+        print(evaluation.feedback)
+        reply = rerun(reply, message, history, evaluation.feedback)       
+    return reply
+
+gr.ChatInterface(chat, type="messages").launch()
+
+
+
+##################################################
+# EXEMPLE AVEC DES TOOLS SIMPLE AVEC BOUCLE (4)
+##################################################
+
+##################################################
+##################################################
+##################################################
