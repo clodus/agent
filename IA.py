@@ -315,3 +315,108 @@ gr.ChatInterface(chat, type="messages").launch()
 ##################################################
 ##################################################
 ##################################################
+
+
+
+##################################################
+# ANOTHER EXAMPLE WHILE TOOL LIST TODO (4)
+##################################################
+def show(text):
+    try:
+        Console().print(text)
+    except Exception:
+        print(text)
+
+def get_todo_report() -> str:
+    result = ""
+    for index, todo in enumerate(todos):
+        if completed[index]:
+            result += f"Todo #{index + 1}: [green][strike]{todo}[/strike][/green]\n"
+        else:
+            result += f"Todo #{index + 1}: {todo}\n"
+    show(result)
+    return result
+
+def create_todos(descriptions: list[str]) -> str:
+    todos.extend(descriptions)
+    completed.extend([False] * len(descriptions))
+    return get_todo_report()
+
+def mark_complete(index: int, completion_notes: str) -> str:
+    if 1 <= index <= len(todos):
+        completed[index - 1] = True
+    else:
+        return "No todo at this index."
+    Console().print(completion_notes)
+    return get_todo_report()
+
+
+mark_complete_json = {
+    "name": "mark_complete",
+    "description": "Mark complete the todo at the given position (starting from 1) and return the full list",
+    "parameters": {
+        'properties': {
+            'index': {
+                'description': 'The 1-based index of the todo to mark as complete',
+                'title': 'Index',
+                'type': 'integer'
+                },
+            'completion_notes': {
+                'description': 'Notes about how you completed the todo in rich console markup',
+                'title': 'Completion Notes',
+                'type': 'string'
+                }
+            },
+        'required': ['index', 'completion_notes'],
+        'type': 'object',
+        'additionalProperties': False
+    }
+}
+
+def handle_tool_calls(tool_calls):
+    results = []
+    for tool_call in tool_calls:
+        tool_name = tool_call.function.name
+        arguments = json.loads(tool_call.function.arguments)
+        tool = globals().get(tool_name)
+        result = tool(**arguments) if tool else {}
+        results.append({"role": "tool","content": json.dumps(result),"tool_call_id": tool_call.id})
+    return results
+
+def loop(messages):
+    done = False
+    while not done:
+        response = openai.chat.completions.create(model="gpt-5.2", messages=messages, tools=tools, reasoning_effort="none")
+        finish_reason = response.choices[0].finish_reason
+        if finish_reason=="tool_calls":
+            message = response.choices[0].message
+            tool_calls = message.tool_calls
+            results = handle_tool_calls(tool_calls)
+            messages.append(message)
+            messages.extend(results)
+        else:
+            done = True
+    show(response.choices[0].message.content)
+
+
+
+system_message = """
+On te donne un problème à résoudre. Utilise tes outils de gestion des tâches (todo) pour planifier une liste d’étapes, puis exécute chaque étape dans l’ordre.
+Utilise maintenant les outils de gestion des tâches pour créer un plan, réaliser les différentes étapes, puis répondre avec la solution.
+Si une quantité nécessaire n’est pas fournie dans la question, ajoute une étape permettant d’en faire une estimation raisonnable.
+Présente ta solution en utilisant le balisage Rich pour la console, sans utiliser de blocs de code.
+Ne pose aucune question à l’utilisateur et ne demande aucune clarification ; réponds uniquement avec la réponse après avoir utilisé tes outils.
+"""
+
+user_message = """
+Un train quitte Boston à 14 h 00 en roulant à 60 mph.
+Un autre train quitte New York à 15 h 00 en roulant à 80 mph en direction de Boston.
+À quelle heure se rencontrent-ils ?
+"""
+
+messages = [{"role": "system", "content": system_message}, {"role": "user", "content": user_message}]
+todos, completed = [], []
+loop(messages)
+##################################################
+##################################################
+##################################################
