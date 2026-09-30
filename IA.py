@@ -212,7 +212,106 @@ gr.ChatInterface(chat, type="messages").launch()
 ##################################################
 # EXEMPLE AVEC DES TOOLS SIMPLE AVEC BOUCLE (4)
 ##################################################
+def record_user_details(email, name="Name not provided", notes="not provided"):
+    push(f"Recording interest from {name} with email {email} and notes {notes}")
+    return {"recorded": "ok"}
 
+def record_unknown_question(question):
+    push(f"Recording {question} asked that I couldn't answer")
+    return {"recorded": "ok"}
+
+record_user_details_json = {
+    "name": "record_user_details",
+    "description": "Use this tool to record that a user is interested in being in touch and provided an email address",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "email": {
+                "type": "string",
+                "description": "The email address of this user"
+            },
+            "name": {
+                "type": "string",
+                "description": "The user's name, if they provided it"
+            }
+            ,
+            "notes": {
+                "type": "string",
+                "description": "Any additional information about the conversation that's worth recording to give context"
+            }
+        },
+        "required": ["email"],
+        "additionalProperties": False
+    }
+}
+
+record_unknown_question_json = {
+    "name": "record_unknown_question",
+    "description": "Always use this tool to record any question that couldn't be answered as you didn't know the answer",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "The question that couldn't be answered"
+            },
+        },
+        "required": ["question"],
+        "additionalProperties": False
+    }
+}
+
+tools = [{"type": "function", "function": record_user_details_json},
+        {"type": "function", "function": record_unknown_question_json}]
+globals()["record_unknown_question","record_user_details"]("this is a really hard question")
+
+########### TOOLS !!!
+def handle_tool_calls(tool_calls):
+    results = []
+    for tool_call in tool_calls:
+        tool_name = tool_call.function.name
+        arguments = json.loads(tool_call.function.arguments)
+        print(f"Tool called: {tool_name}", flush=True)
+        tool = globals().get(tool_name)
+        result = tool(**arguments) if tool else {}
+        results.append({"role": "tool","content": json.dumps(result),"tool_call_id": tool_call.id})
+    return results
+
+system_prompt = f"Tu agis en tant que {name}. Tu réponds aux questions sur le site web de {name}, \
+en particulier aux questions concernant la carrière, le parcours, les compétences et l’expérience de {name}. \
+Ta responsabilité est de représenter {name} dans les interactions sur le site web de la manière la plus fidèle possible. \
+Tu disposes d’un résumé du parcours de {name} ainsi que de son profil LinkedIn, que tu peux utiliser pour répondre aux questions. \
+Sois professionnel et engageant, comme si tu échangeais avec un client potentiel ou un futur employeur ayant découvert le site web. \
+Si tu ne connais pas la réponse à une question, utilise ton outil record_unknown_question pour enregistrer la question à laquelle tu n’as pas pu répondre, même s’il s’agit de quelque chose de trivial ou sans rapport avec la carrière. \
+Si l’utilisateur engage une discussion, essaie de l’orienter vers une prise de contact par e-mail ; demande-lui son adresse e-mail et enregistre-la à l’aide de ton outil record_user_details."
+
+system_prompt += f"\n\n## Résumé :\n{summary}\n\n## Profil LinkedIn :\n{linkedin}\n\n"
+system_prompt += f"Avec ce contexte, échange avec l’utilisateur en restant toujours dans le rôle de {name}."
+
+def chat(message, history):
+    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": message}]
+    done = False
+    while not done:
+
+        # This is the call to the LLM - see that we pass in the tools json
+
+        response = openai.chat.completions.create(model="gpt-4o-mini", messages=messages, tools=tools)
+
+        finish_reason = response.choices[0].finish_reason
+        
+        # If the LLM wants to call a tool, we do that!
+         
+        if finish_reason=="tool_calls":
+            message = response.choices[0].message
+            tool_calls = message.tool_calls
+            results = handle_tool_calls(tool_calls)
+            messages.append(message)
+            messages.extend(results)
+        else:
+            done = True
+    return response.choices[0].message.content
+
+gr.ChatInterface(chat, type="messages").launch()
 ##################################################
 ##################################################
 ##################################################
