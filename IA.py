@@ -437,3 +437,135 @@ with trace("Telling a joke"):
 ##################################################
 ##################################################
 ##################################################
+
+##################################################
+# input_guardrails = sécurité / validation
+# handoffs = routage et délégation entre agents
+# tools = capacités que possède un agent
+##################################################
+
+########################################### TOOLS ####################
+## TOOLS redaction de prospection commercialeavec différents styles ##
+###########
+instructions1 = """Tu es un agent commercial travaillant pour ComplAI,
+une entreprise qui propose un outil SaaS basé sur l'IA permettant d'assurer la conformité SOC2 et de préparer les audits.
+Tu rédiges des e-mails de prospection professionnels et sérieux."""
+
+instructions2 = """Tu es un agent commercial drôle et engageant travaillant pour ComplAI,
+une entreprise qui propose un outil SaaS basé sur l'IA permettant d'assurer la conformité SOC2 et de préparer les audits.
+Tu rédiges des e-mails de prospection pleins d'esprit et engageants, susceptibles d'obtenir une réponse."""
+
+instructions3 = """Tu es un agent commercial très occupé travaillant pour ComplAI,
+une entreprise qui propose un outil SaaS basé sur l'IA permettant d'assurer la conformité SOC2 et de préparer les audits.
+Tu rédiges des e-mails de prospection concis et allant droit au but."""
+
+sales_agent1 = Agent(name="DeepSeek Sales Agent", instructions=instructions1, model=deepseek_model)
+sales_agent2 =  Agent(name="Gemini Sales Agent", instructions=instructions2, model=gemini_model)
+sales_agent3  = Agent(name="Llama3.3 Sales Agent",instructions=instructions3,model=llama3_3_model)
+
+description = "Rédiger un e-mail de prospection commerciale"
+
+tool1 = sales_agent1.as_tool(tool_name="sales_agent1", tool_description=description)
+tool2 = sales_agent2.as_tool(tool_name="sales_agent2", tool_description=description)
+tool3 = sales_agent3.as_tool(tool_name="sales_agent3", tool_description=description)
+
+tools = [tool1, tool2, tool3]
+
+########################################### TOOLS et handoff ####################
+## TOOLS mise en forme et envoi du mail ##
+###########
+@function_tool
+def send_html_email(subject: str, html_body: str) -> Dict[str, str]:
+    """ Send out an email with the given subject and HTML body to all sales prospects """
+    sg = sendgrid.SendGridAPIClient(api_key=os.environ.get('SENDGRID_API_KEY'))
+    from_email = Email("ed@edwarddonner.com")  # Change to your verified sender
+    to_email = To("ed.donner@gmail.com")  # Change to your recipient
+    content = Content("text/html", html_body)
+    mail = Mail(from_email, to_email, subject, content).get()
+    sg.client.mail.send.post(request_body=mail)
+    return {"status": "success"}
+
+subject_instructions = """Tu peux rédiger l'objet d'un e-mail de prospection commerciale.
+À partir d'un message qui t'est fourni, tu dois rédiger un objet d'e-mail susceptible d'obtenir une réponse."""
+
+html_instructions = """Tu peux convertir le corps d'un e-mail au format texte en un corps d'e-mail HTML.
+À partir d'un corps d'e-mail au format texte, qui peut contenir du Markdown,
+tu dois le convertir en HTML avec une mise en page et un design simples, clairs et convaincants."""
+
+subject_writer = Agent(name="Email subject writer", instructions=subject_instructions, model="gpt-4o-mini")
+subject_tool = subject_writer.as_tool(tool_name="subject_writer", tool_description="Write a subject for a cold sales email")
+
+html_converter = Agent(name="HTML email body converter", instructions=html_instructions, model="gpt-4o-mini")
+html_tool = html_converter.as_tool(tool_name="html_converter",tool_description="Convert a text email body to an HTML email body")
+
+email_tools = [subject_tool, html_tool, send_html_email]
+
+instructions = """Tu es un agent chargé de mettre en forme et d'envoyer des e-mails.
+Tu reçois le corps d'un e-mail à envoyer.
+Tu utilises d'abord le tool subject_writer pour rédiger l'objet de l'e-mail,
+puis le tool html_converter pour convertir le corps de l'e-mail en HTML.
+Enfin, tu utilises le tool send_html_email pour envoyer l'e-mail avec l'objet et le corps au format HTML."""
+
+# AGENT QUI PEUT UTILISER DES OUTILS ET SERA SOLLICITER PAR UN AUTRE AGENT POUR PRENDRE LA MAIN (handoff)
+emailer_agent = Agent(
+    name="Email Manager",
+    instructions=instructions,
+    tools=email_tools,
+    model="gpt-4o-mini",
+    handoff_description="Convert an email to HTML and send it")
+
+handoffs = [emailer_agent]
+
+########### AGENT COODINATEUR QUI UTILISE DES TOOLS, UN AGENT GUARD POUR CONTROLE ET DELEGUE A UN AUTRE AGENT
+sales_manager_instructions = """
+Tu es un responsable commercial chez ComplAI. Ton objectif est de trouver le meilleur e-mail de prospection commerciale en utilisant les tools sales_agent.
+
+Suis attentivement les étapes suivantes :
+
+1. Générer les brouillons : utilise les trois tools sales_agent pour générer trois brouillons d'e-mails différents. Ne passe pas à l'étape suivante tant que les trois brouillons ne sont pas prêts.
+
+2. Évaluer et sélectionner : examine les brouillons et sélectionne le meilleur e-mail en te basant sur ton jugement pour déterminer lequel sera le plus efficace.
+Tu peux utiliser les tools plusieurs fois si les résultats obtenus lors de la première tentative ne te satisfont pas.
+
+3. Transfert pour l'envoi : transmets UNIQUEMENT le brouillon gagnant à l'agent 'Email Manager'. L'Email Manager se chargera de la mise en forme et de l'envoi.
+
+Règles essentielles :
+- Tu dois utiliser les tools sales_agent pour générer les brouillons. Ne les rédige pas toi-même.
+- Tu dois effectuer un handoff d'EXACTEMENT UN e-mail vers l'Email Manager. Jamais plus d'un.
+"""
+sales_manager = Agent(
+    name="Sales Manager",
+    instructions=sales_manager_instructions,
+    tools=tools,
+    handoffs=[emailer_agent],
+    model="gpt-4o-mini",
+    input_guardrails=[guardrail_against_name]
+    )
+
+message = "Send out a cold sales email addressed to Dear CEO from Alice"
+
+with trace("Protected Automated SDR"):
+    result = await Runner.run(sales_manager, message)
+
+#### AGENT DE SECU ET CONTROLE UTILISE PAR l'AGENT MANAGER
+##########################################################
+@input_guardrail
+async def guardrail_against_name(ctx, agent, message):
+    result = await Runner.run(guardrail_agent, message, context=ctx.context)
+    is_name_in_message = result.final_output.is_name_in_message
+    return GuardrailFunctionOutput(output_info={"found_name": result.final_output},tripwire_triggered=is_name_in_message)
+
+class NameCheckOutput(BaseModel):
+    is_name_in_message: bool
+    name: str
+
+guardrail_agent = Agent( 
+    name="Name check",
+    instructions="Check if the user is including someone's personal name in what they want you to do.",
+    output_type=NameCheckOutput,
+    model="gpt-4o-mini"
+)
+
+##################################################
+##################################################
+##################################################
